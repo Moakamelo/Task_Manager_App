@@ -13,6 +13,7 @@ from salary_service import (
 )
 import os
 import requests
+from task_assignment_service import Task
 import json
 from dotenv import load_dotenv
 from email_services import send_credentials_email, send_approval_notification, send_new_application_notification
@@ -183,6 +184,19 @@ PROJECT_TYPES = {
 TASK_SERVICE_URL = os.environ.get('TASK_SERVICE_URL', 'http://localhost:5002/api')
 
 def assign_tasks(tasks):
+    # Fix URL construction - the function calls recommendations endpoint instead of actual assignment
+    response = requests.post(
+        f'{TASK_SERVICE_URL}/task-service/tasks_recommendation',  # Use recommendations endpoint
+        json={'tasks': tasks},
+        headers=api_headers()
+    )
+    if response.status_code == 200:
+        return response.json()
+    return None
+
+# Add new function for actual assignment
+def assign_tasks_with_save(tasks):
+    """Actually assign tasks and save to database"""
     response = requests.post(
         f'{TASK_SERVICE_URL}/task-service/assign-tasks',
         json={'tasks': tasks},
@@ -566,7 +580,7 @@ def developer_dashboard():
     # Categorize tasks by status - Updated to match Task model status values
     in_progress_tasks = [task for task in assigned_tasks if task.get('status') == 'in_progress']
     pending_tasks = [task for task in assigned_tasks if task.get('status') == 'assigned']
-    pending_approval_tasks = [task for task in assigned_tasks if task.get('status') == 'submitted']
+    submited_tasks = [task for task in assigned_tasks if task.get('status') == 'submitted']
     completed_tasks = [task for task in assigned_tasks if task.get('status') == 'completed']
     
     # Calculate performance history (last 6 months)
@@ -1519,6 +1533,31 @@ def update_metrics(emp_id):
     
     return jsonify({'success': True})
 
+@app.route('/api/assign_task_confirmed', methods=['POST'])
+def assign_task_confirmed():
+    """Actually assign and save the task after confirmation"""
+    if 'emp_id' not in session or session.get('role') != 'project manager':
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 403
+    
+    task_data = request.json
+    tasks = [task_data]
+    
+    # Use the actual assignment endpoint that saves to database
+    result = assign_tasks_with_save(tasks)
+    
+    if not result or not result.get('success'):
+        return jsonify({
+            'success': False, 
+            'error': result.get('error', 'Failed to assign task')
+        }), 500
+        
+    return jsonify({
+        'success': True,
+        'assignment': result.get('assignments', {}).get(task_data['task_id']),
+        'saved_tasks': result.get('saved_tasks', []),
+        'email_notifications': result.get('email_notifications', [])
+    })
+
 
 @app.route('/api/create_task', methods=['POST'])
 def create_task():
@@ -1540,19 +1579,19 @@ def create_task():
     # Create list of tasks (API expects an array)
     tasks = [task_data]
     
-    # Assign task using the task service
-    result = assign_tasks(tasks)
+    # Get recommendation first using the recommendations endpoint
+    result = assign_tasks(tasks)  # This now calls the recommendations endpoint
     
     if not result or 'success' not in result or not result['success']:
         return jsonify({
             'success': False, 
-            'error': result.get('error', 'Failed to assign task')
+            'error': result.get('error', 'Failed to get task recommendation')
         }), 500
         
     return jsonify({
         'success': True,
         'task': task_data,
-        'assignment': result.get('assignments', {}).get(task_data['task_id'])
+        'recommendation': result.get('assignments', {}).get(task_data['task_id'])
     })
 
 

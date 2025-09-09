@@ -580,123 +580,95 @@
         
         // Get recommendations for the best employee match
         function getRecommendation() {
-            // Validate form
-            const taskId = document.getElementById('taskId').value;
-            const projectType = document.getElementById('projectType').value;
-            const complexity = document.getElementById('complexity').value;
-            const priority = document.getElementById('priority').value;
-            
-            if (!taskId || !projectType) {
-                alert('Please fill in all required fields');
-                return;
-            }
-            
-            // Get selected skills
-            const selectedSkills = [];
-            document.querySelectorAll('.skill-checkbox:checked').forEach(checkbox => {
-                selectedSkills.push(checkbox.value);
-            });
-            
-            if (selectedSkills.length === 0) {
-                alert('Please select at least one skill');
-                return;
-            }
-            
-            // Show loading
-            document.getElementById('loadingRecommendation').classList.remove('hidden');
-            document.getElementById('recommendationResults').classList.add('hidden');
-            document.getElementById('noRecommendation').classList.add('hidden');
-            
-            // Prepare task data
-            const taskData = {
-                task_id: taskId,
-                project_type: projectType,
-                complexity: complexity,
-                priority: priority,
-                skills: selectedSkills
-            };
-            
-            // Make API request to get recommendation
-            fetch('/api/get_assignment_recommendation', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(taskData)
-            })
-            .then(response => response.json())
-            .then(data => {
-                document.getElementById('loadingRecommendation').classList.add('hidden');
-                
-                if (data.success && data.recommendations && typeof data.recommendations !== 'string') {
-                    // Show recommendation results
-                    document.getElementById('recommendedName').textContent = data.recommendations.name;
-                    document.getElementById('recommendedId').textContent = `Employee ID: ${data.recommendations.emp_id}`;
-                    document.getElementById('skillMatch').textContent = data.recommendations.skill_match_percentage;
-                    document.getElementById('matchScore').textContent = data.recommendations.score;
-                    
-                    document.getElementById('recommendationResults').classList.remove('hidden');
-                } else {
-                    // Show no recommendation message
-                    document.getElementById('noRecommendation').classList.remove('hidden');
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                document.getElementById('loadingRecommendation').classList.add('hidden');
-                document.getElementById('noRecommendation').classList.remove('hidden');
-            });
-        }
-        
-        // Assign the task to the recommended employee
-        function assignTask() {
-            // Get task details
-            const taskId = document.getElementById('taskId').value;
-            const projectType = document.getElementById('projectType').value;
-            const complexity = document.getElementById('complexity').value;
-            const priority = document.getElementById('priority').value;
-            
-            // Get selected skills
-            const selectedSkills = [];
-            document.querySelectorAll('.skill-checkbox:checked').forEach(checkbox => {
-                selectedSkills.push(checkbox.value);
-            });
-            
-            // Prepare task data
-            const taskData = {
-                task_id: taskId,
-                project_type: projectType,
-                complexity: complexity,
-                priority: priority,
-                skills: selectedSkills
-            };
-            
-            // Make API request to create and assign task
-            fetch('/api/create_task', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(taskData)
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    alert('Task assigned successfully!');
-                    hideTaskAssignment();
-                } else {
-                    alert('Failed to assign task: ' + (data.error || 'Unknown error'));
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                alert('An error occurred while assigning the task');
-            });
-        }
+    const taskData = {
+        task_id: document.getElementById('taskId').value,
+        project_type: document.getElementById('projectType').value,
+        complexity: document.getElementById('complexity').value,
+        priority: document.getElementById('priority').value,
+        requirements: document.getElementById('taskRequirements').value
+    };
 
-        document.addEventListener('DOMContentLoaded', function() {
-        loadSubmittedTasks();
+    // Show loading
+    document.getElementById('loadingRecommendation').classList.remove('hidden');
+    document.getElementById('recommendationResults').classList.add('hidden');
+    document.getElementById('noRecommendation').classList.add('hidden');
+
+    fetch('/api/create_task', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(taskData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        document.getElementById('loadingRecommendation').classList.add('hidden');
+        
+        if (data.success && data.recommendation) {
+            displayRecommendation(data.recommendation);
+        } else {
+            document.getElementById('noRecommendation').classList.remove('hidden');
+        }
+    })
+    .catch(error => {
+        document.getElementById('loadingRecommendation').classList.add('hidden');
+        document.getElementById('noRecommendation').classList.remove('hidden');
+        console.error('Error:', error);
     });
+}
+
+function displayRecommendation(recommendation) {
+    document.getElementById('recommendedName').textContent = recommendation.name || 'Unknown';
+    document.getElementById('recommendedId').textContent = recommendation.emp_id || 'Unknown';
+    document.getElementById('skillMatch').textContent = recommendation.skill_match_percentage || 'N/A';
+    document.getElementById('matchScore').textContent = recommendation.predicted_success_score || 'N/A';
+    
+    // Store recommendation data for assignment
+    window.currentRecommendation = recommendation;
+    window.currentTaskData = {
+        task_id: document.getElementById('taskId').value,
+        project_type: document.getElementById('projectType').value,
+        complexity: document.getElementById('complexity').value,
+        priority: document.getElementById('priority').value,
+        requirements: document.getElementById('taskRequirements').value
+    };
+    
+    document.getElementById('recommendationResults').classList.remove('hidden');
+}
+
+        
+       function assignTask() {
+    if (!window.currentTaskData || !window.currentRecommendation) {
+        alert('No task or recommendation data available');
+        return;
+    }
+
+    // Add employee assignment to task data
+    window.currentTaskData.assigned_to = window.currentRecommendation.emp_id;
+    
+    fetch('/api/assign_task_confirmed', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(window.currentTaskData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('Task assigned successfully!');
+            hideTaskAssignment();
+            // Refresh the page or update the UI
+            location.reload();
+        } else {
+            alert('Failed to assign task: ' + data.error);
+        }
+    })
+    .catch(error => {
+        alert('Error assigning task: ' + error);
+        console.error('Error:', error);
+    });
+}
 
     function loadSubmittedTasks() {
     // Show loading state

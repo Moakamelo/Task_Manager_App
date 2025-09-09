@@ -9,7 +9,8 @@ import pickle
 import json
 from datetime import datetime
 from dotenv import load_dotenv
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 from collections import defaultdict
@@ -175,194 +176,294 @@ def get_employee_by_id(emp_id):
         return None
 
 # Function to load or train the model
-def load_or_train_model():
-    model_path = 'task_assignment_model.pkl'
+def train_scoring_model(employees_data):
+    """Train a model to predict assignment success scores (no scaling needed)"""
     
-    # Check if model already exists
-    if os.path.exists(model_path):
-        try:
-            with open(model_path, 'rb') as f:
-                return pickle.load(f)
-        except Exception as e:
-            print(f"Error loading model: {str(e)}")
-            # If loading fails, train a new model
+    # Create synthetic assignment history with success scores
+    training_data = generate_training_data(employees_data)
     
-    # Train a new model
-    return train_model(model_path)
-
-def train_model(model_path):
-    print("Training new task assignment model...")
+    if len(training_data) < 10:
+        print("Insufficient training data, falling back to rule-based scoring")
+        return None
     
-    # Get all employees
-    employees_data = get_all_employees()
-    if not employees_data:
-        print("Error: Could not fetch employees data")
-        # Return a simple default model that just assigns based on skills
-        return {'model': None, 'feature_columns': []}
+    df = pd.DataFrame(training_data)
     
-    # Ensure employees_data is a list of dictionaries
-    if isinstance(employees_data, str) or not isinstance(employees_data, list):
-        print(f"Error: Unexpected employees data format: {type(employees_data)}")
-        # Return a simple default model
-        return {'model': None, 'feature_columns': []}
+    # Features: task and employee characteristics
+    feature_cols = [
+        'skill_match_percentage', 'experience', 'success_rate', 
+        'tasks_completed', 'complexity_score', 'priority_score',
+        'workload_factor'
+    ]
     
-    # Create synthetic tasks based on employee skills
-    try:
-        tasks = create_synthetic_tasks(employees_data)
-    except Exception as e:
-        print(f"Error creating synthetic tasks: {str(e)}")
-        return {'model': None, 'feature_columns': []}
-    
-    # Feature engineering and model training
-    try:
-        model = build_assignment_model(employees_data, tasks)
-        # Save the model
-        with open(model_path, 'wb') as f:
-            pickle.dump(model, f)
-        return model
-    except Exception as e:
-        print(f"Error building model: {str(e)}")
-        return {'model': None, 'feature_columns': []}
-
-def create_synthetic_tasks(employees):
-    """Create synthetic tasks based on employee skills"""
-    synthetic_tasks = []
-    task_id_counter = 1000
-    
-    # Extract all unique skills
-    all_skills = set()
-    for emp in employees:
-        # Ensure emp is a dictionary
-        if not isinstance(emp, dict):
-            print(f"Warning: Employee is not a dictionary: {emp}")
-            continue
-            
-        if 'skills' in emp and emp['skills']:
-            # Ensure skills is a list
-            if isinstance(emp['skills'], list):
-                all_skills.update(emp['skills'])
-            else:
-                print(f"Warning: Skills is not a list: {emp['skills']}")
-    
-    # Create tasks for common skill combinations
-    for project_type, skills in PROJECT_TYPES.items():
-        # Filter to skills that exist in our employees
-        relevant_skills = [skill for skill in skills if skill in all_skills]
-        
-        if not relevant_skills:
-            continue
-            
-        # Create various tasks with different combinations of skills
-        for i in range(5):  # Create 5 tasks per project type
-            # Select 2-4 skills randomly
-            num_skills = min(np.random.randint(2, 5), len(relevant_skills))
-            selected_skills = np.random.choice(relevant_skills, num_skills, replace=False)
-            
-            task = {
-                "task_id": f"TASK{task_id_counter}",
-                "project_type": project_type,
-                "skills": list(selected_skills),
-                "complexity": np.random.choice(["Low", "Medium", "High"]),
-                "priority": np.random.choice(["Low", "Medium", "High"])
-            }
-            
-            synthetic_tasks.append(task)
-            task_id_counter += 1
-    
-    return pd.DataFrame(synthetic_tasks)
-
-def build_assignment_model(employees, tasks_df):
-    """Build the ML model for task assignment"""
-    # Process employees
-    if not employees:
-        return {'model': None, 'feature_columns': []}
-        
-    # Convert to DataFrame or ensure it's a DataFrame
-    if isinstance(employees, list):
-        employees_df = pd.DataFrame(employees)
-    else:
-        employees_df = employees
-    
-    # Convert skills to string lists if they're not already
-    employees_df['skills'] = employees_df['skills'].apply(
-        lambda x: x if isinstance(x, list) else []
-    )
-    
-    # Extract all unique skills
-    all_skills = set()
-    for skills in employees_df['skills']:
-        if skills:
-            all_skills.update(skills)
-    
-    # Create skill matrices for employees
-    employee_skill_matrix = pd.DataFrame(0, index=employees_df.index, columns=list(all_skills))
-    for idx, skills in enumerate(employees_df['skills']):
-        for skill in skills:
-            if skill in all_skills:  # Check if skill exists in our column set
-                employee_skill_matrix.loc[idx, skill] = 1
-    
-    # Generate synthetic historical assignments
-    historical_assignments = []
-    
-    for _, task in tasks_df.iterrows():
-        # Find employees with matching skills
-        task_skills = set(task['skills'])
-        
-        for idx, emp_row in employees_df.iterrows():
-            emp_skills = set(emp_row['skills'])
-            emp_id = emp_row['emp_id']
-            
-            # Calculate skill match
-            skill_match = len(task_skills.intersection(emp_skills)) / len(task_skills) if task_skills else 0
-            
-            # Skip if no skill match
-            if skill_match == 0:
-                continue
-                
-            # Calculate experience and success rate
-            experience = emp_row.get('experience', 0)
-            success_rate = emp_row.get('success_rate', 0.0)
-            
-            # Record the assignment with features
-            assignment = {
-                "task_id": task['task_id'],
-                "emp_id": emp_id,
-                "project_type": task['project_type'],
-                "complexity": 0 if task['complexity'] == "Low" else 1 if task['complexity'] == "Medium" else 2,
-                "priority": 0 if task['priority'] == "Low" else 1 if task['priority'] == "Medium" else 2,
-                "skill_match_percentage": skill_match * 100,
-                "experience": experience,
-                "success_rate": success_rate,
-                "tasks_completed": emp_row.get('tasks_completed', 0)
-            }
-            
-            historical_assignments.append(assignment)
-    
-    if not historical_assignments:
-        print("Error: No valid assignments generated")
-        return {'model': None, 'feature_columns': []}
-        
-    # Convert to DataFrame
-    historical_df = pd.DataFrame(historical_assignments)
-    
-    # Prepare features and target
-    feature_cols = ['complexity', 'priority', 'skill_match_percentage', 
-                   'experience', 'success_rate', 'tasks_completed']
-    
-    X = historical_df[feature_cols]
-    y = historical_df["emp_id"]
+    X = df[feature_cols]
+    y = df['assignment_success_score']
     
     # Split data
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
-    # Train model
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    # Train model (RandomForest doesn't need scaling)
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
+    
+    # Evaluate
+    train_score = model.score(X_train, y_train)
+    test_score = model.score(X_test, y_test)
+    
+    print(f"Model Performance - Train: {train_score:.3f}, Test: {test_score:.3f}")
     
     return {
         'model': model,
         'feature_columns': feature_cols
+        # No scaler needed!
     }
+
+def generate_training_data(employees):
+    """Generate synthetic training data with realistic success scores"""
+    training_data = []
+    
+    # Create synthetic tasks
+    complexities = ['Low', 'Medium', 'High']
+    priorities = ['Low', 'Medium', 'High']
+    
+    # Extract all skills
+    all_skills = set()
+    for emp in employees:
+        if isinstance(emp, dict) and 'skills' in emp:
+            all_skills.update(emp.get('skills', []))
+    
+    all_skills = list(all_skills)
+    
+    # Generate training examples
+    for _ in range(1000):  # Generate 1000 synthetic assignments
+        # Create random task
+        num_required_skills = np.random.randint(1, min(4, len(all_skills)) + 1)
+        required_skills = np.random.choice(all_skills, num_required_skills, replace=False)
+        complexity = np.random.choice(complexities)
+        priority = np.random.choice(priorities)
+        
+        # Pick random employee
+        emp = np.random.choice(employees)
+        if not isinstance(emp, dict):
+            continue
+            
+        emp_skills = emp.get('skills', [])
+        if not isinstance(emp_skills, list):
+            emp_skills = []
+        
+        # Calculate features
+        skill_match = len(set(required_skills).intersection(set(emp_skills))) / len(required_skills)
+        
+        # Skip if no skill match
+        if skill_match == 0:
+            continue
+        
+        experience = emp.get('experience', 0)
+        success_rate = emp.get('success_rate', 0.5)
+        tasks_completed = emp.get('tasks_completed', 0)
+        
+        complexity_score = 0 if complexity == 'Low' else 1 if complexity == 'Medium' else 2
+        priority_score = 0 if priority == 'Low' else 1 if priority == 'Medium' else 2
+        workload_factor = np.random.uniform(0.5, 1.0)  # Random workload
+        
+        # Calculate realistic success score based on factors
+        success_score = calculate_realistic_success_score(
+            skill_match, experience, success_rate, tasks_completed,
+            complexity_score, workload_factor
+        )
+        
+        training_data.append({
+            'skill_match_percentage': skill_match * 100,
+            'experience': experience,
+            'success_rate': success_rate,
+            'tasks_completed': tasks_completed,
+            'complexity_score': complexity_score,
+            'priority_score': priority_score,
+            'workload_factor': workload_factor,
+            'assignment_success_score': success_score
+        })
+    
+    return training_data
+
+
+def calculate_realistic_success_score(skill_match, experience, success_rate, 
+                                    tasks_completed, complexity_score, workload_factor):
+    """Calculate a realistic success score for training data"""
+    
+    # Base score from skill match
+    base_score = skill_match
+    
+    # Experience factor (helps with complex tasks)
+    exp_factor = 1.0 + (experience / 20.0)  # Max 1.5x boost
+    if complexity_score == 2:  # High complexity
+        exp_factor = 1.0 + (experience / 10.0)  # More experience needed
+    
+    # Success rate directly influences outcome
+    success_factor = 0.5 + (success_rate / 2.0)  # 0.5 to 1.0 multiplier
+    
+    # Task completion experience
+    completion_factor = 1.0 + min(tasks_completed / 200.0, 0.3)  # Max 1.3x
+    
+    # Workload penalty
+    workload_penalty = workload_factor
+    
+    # Calculate final score with some randomness
+    final_score = (base_score * exp_factor * success_factor * completion_factor * workload_penalty)
+    
+    # Add some noise and clamp to [0, 1]
+    final_score += np.random.normal(0, 0.1)
+    final_score = max(0, min(1, final_score))
+    
+    return final_score
+
+def assign_tasks_ml_scoring(tasks, employees, model_data=None):
+    """Assign tasks using ML model (no scaler version)"""
+    
+    if not employees or not tasks:
+        return {"error": "Invalid input data"}
+    
+    assignments = {}
+    current_workloads = defaultdict(int)
+    
+    for emp in employees:
+        if isinstance(emp, dict) and 'emp_id' in emp:
+            current_workloads[emp['emp_id']] = emp.get('current_workload', 0)
+    
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+            
+        task_id = task.get('task_id', 'unknown')
+        required_skills = task.get('skills', [])
+        
+        candidate_scores = []
+        
+        for emp in employees:
+            if not isinstance(emp, dict) or 'emp_id' not in emp:
+                continue
+            
+            emp_skills = emp.get('skills', [])
+            if not isinstance(emp_skills, list):
+                emp_skills = []
+            
+            # Calculate skill match
+            skill_match = 0
+            if required_skills and emp_skills:
+                skill_match = len(set(required_skills).intersection(set(emp_skills))) / len(required_skills)
+            
+            if skill_match == 0:
+                continue
+            
+            # Prepare features for ML model
+            features = {
+                'skill_match_percentage': skill_match * 100,
+                'experience': emp.get('experience', 0),
+                'success_rate': emp.get('success_rate', 0.5),
+                'tasks_completed': emp.get('tasks_completed', 0),
+                'complexity_score': 0 if task.get('complexity') == 'Low' else 1 if task.get('complexity') == 'Medium' else 2,
+                'priority_score': 0 if task.get('priority') == 'Low' else 1 if task.get('priority') == 'Medium' else 2,
+                'workload_factor': max(0.1, 1.0 - (current_workloads[emp['emp_id']] / 5.0))
+            }
+            
+            # Predict score using ML model if available
+            if model_data and model_data.get('model'):
+                try:
+                    # Create feature DataFrame (keeps column names)
+                    feature_df = pd.DataFrame([features])[model_data['feature_columns']]
+                    predicted_score = model_data['model'].predict(feature_df)[0]
+                except Exception as e:
+                    print(f"ML prediction error: {e}")
+                    # Fallback to rule-based scoring
+                    predicted_score = calculate_assignment_score(emp, task, skill_match, current_workloads[emp['emp_id']])
+            else:
+                # Use rule-based scoring
+                predicted_score = calculate_assignment_score(emp, task, skill_match, current_workloads[emp['emp_id']])
+            
+            candidate_scores.append({
+                'emp_id': emp['emp_id'],
+                'name': emp.get('name', ''),
+                'score': predicted_score,
+                'skill_match': skill_match
+            })
+        
+        if not candidate_scores:
+            assignments[task_id] = "No eligible employees found"
+            continue
+        
+        # Sort by score and assign to best candidate
+        candidate_scores.sort(key=lambda x: x['score'], reverse=True)
+        best_candidate = candidate_scores[0]
+        
+        assignments[task_id] = {
+            "emp_id": best_candidate['emp_id'],
+            "name": best_candidate['name'],
+            "skill_match_percentage": f"{best_candidate['skill_match'] * 100:.1f}%",
+            "predicted_success_score": f"{best_candidate['score']:.3f}"
+        }
+        
+        current_workloads[best_candidate['emp_id']] += 1
+    
+    return assignments
+
+
+def calculate_assignment_score(employee, task, skill_match, current_workload):
+    """Calculate assignment score for an employee-task pair (fallback function)"""
+    
+    # Base score from skill match (0-1)
+    skill_score = skill_match
+    
+    # Experience factor (normalize to 0-1, assuming max 10 years)
+    experience = employee.get('experience', 0)
+    experience_score = min(experience / 10.0, 1.0)
+    
+    # Success rate (already 0-1)
+    success_rate = employee.get('success_rate', 0.5)
+    
+    # Task completion history (normalize to 0-1, assuming max 100 tasks)
+    tasks_completed = employee.get('tasks_completed', 0)
+    completion_score = min(tasks_completed / 100.0, 1.0)
+    
+    # Workload penalty (0-1, where 1 is best)
+    # Assuming max reasonable workload is 5 concurrent tasks
+    workload_penalty = max(0, 1 - (current_workload / 5.0))
+    
+    # Priority boost for high-priority tasks
+    priority_boost = 1.0
+    if task.get('priority') == 'High':
+        priority_boost = 1.2
+    elif task.get('priority') == 'Low':
+        priority_boost = 0.9
+    
+    # Complexity matching - experienced employees get boost for complex tasks
+    complexity_factor = 1.0
+    if task.get('complexity') == 'High' and experience > 5:
+        complexity_factor = 1.1
+    elif task.get('complexity') == 'Low' and experience < 2:
+        complexity_factor = 1.1
+    
+    # Weighted final score
+    final_score = (
+        0.40 * skill_score +           # 40% skill match
+        0.20 * success_rate +          # 20% success rate  
+        0.15 * experience_score +      # 15% experience
+        0.10 * completion_score +      # 10% task history
+        0.15 * workload_penalty        # 15% workload consideration
+    ) * priority_boost * complexity_factor
+    
+    return final_score
+
+
+def save_model(model_data, path='task_scoring_model.pkl'):
+    """Save the trained model"""
+    with open(path, 'wb') as f:
+        pickle.dump(model_data, f)
+
+def load_model(path='task_scoring_model.pkl'):
+    """Load the trained model"""
+    if os.path.exists(path):
+        with open(path, 'rb') as f:
+            return pickle.load(f)
+    return None
+
 
 def get_skills_for_project_type(project_type):
     """Get the required skills for a given project type"""
@@ -379,141 +480,6 @@ def get_skills_for_project_type(project_type):
     # If no match, return general programming skills
     return ["Programming", "Problem Solving", "Communication"]
 
-def assign_tasks_ml(tasks, employees, model_data):
-    """Assign tasks to employees using ML model"""
-    if not employees or not isinstance(employees, list):
-        print(f"Error: Invalid employees data: {type(employees)}")
-        return {"error": "Invalid employees data"}
-        
-    if not tasks or not isinstance(tasks, list):
-        print(f"Error: Invalid tasks data: {type(tasks)}")
-        return {"error": "Invalid tasks data"}
-    
-    assignments = {}
-    
-    # Track assigned workload
-    current_workloads = defaultdict(int)
-    for emp in employees:
-        if isinstance(emp, dict) and 'emp_id' in emp:
-            current_workloads[emp['emp_id']] = 0
-    
-    # Process each task
-    for task in tasks:
-        if not isinstance(task, dict):
-            print(f"Error: Task is not a dictionary: {task}")
-            assignments[str(task)] = "Invalid task format"
-            continue
-            
-        task_id = task.get('task_id', 'unknown')
-        project_type = task.get('project_type', '')
-        required_skills = task.get('skills', [])
-        
-        # Generate candidate features for each employee
-        candidates = []
-        
-        for emp in employees:
-            if not isinstance(emp, dict) or 'emp_id' not in emp:
-                continue
-                
-            emp_id = emp['emp_id']
-            emp_skills = emp.get('skills', [])
-            
-            # Ensure skills is a list
-            if not isinstance(emp_skills, list):
-                emp_skills = []
-            
-            # Calculate skill match
-            skill_match = 0
-            if required_skills and emp_skills:
-                matching_skills = set(required_skills).intersection(set(emp_skills))
-                skill_match = len(matching_skills) / len(required_skills)
-            
-            # Skip if no skill match
-            if skill_match == 0:
-                continue
-                
-            # Create feature vector for this employee-task pair
-            features = {
-                "emp_id": emp_id,
-                "name": emp.get('name', ''),
-                "complexity": 0 if task.get('complexity', '') == "Low" else 1 if task.get('complexity', '') == "Medium" else 2,
-                "priority": 0 if task.get('priority', '') == "Low" else 1 if task.get('priority', '') == "Medium" else 2,
-                "skill_match_percentage": skill_match * 100,
-                "experience": emp.get('experience', 0),
-                "success_rate": emp.get('success_rate', 0),
-                "tasks_completed": emp.get('tasks_completed', 0),
-                "current_workload": current_workloads[emp_id]
-            }
-            
-            candidates.append(features)
-        
-        if not candidates:
-            assignments[task_id] = "No eligible employees found for this task"
-            continue
-        
-        # Convert to DataFrame
-        candidates_df = pd.DataFrame(candidates)
-        
-        # If we have ML model available and it has feature columns defined
-        if model_data and 'model' in model_data and model_data['model'] and 'feature_columns' in model_data:
-            model = model_data['model']
-            feature_cols = model_data['feature_columns']
-            
-            # Get features for model prediction if all required columns exist
-            all_cols_exist = all(col in candidates_df.columns for col in feature_cols)
-            
-            if all_cols_exist:
-                X_candidates = candidates_df[feature_cols].copy()
-                
-                # Calculate custom score based on priorities
-                candidates_df["custom_score"] = (
-                    0.7 * candidates_df["skill_match_percentage"] / 100 +  # 70% weight for skill match
-                    0.2 * candidates_df["success_rate"] / 100 +            # 20% weight for success rate
-                    0.1 * candidates_df["experience"] / 10                 # 10% weight for experience
-                )
-                
-                # Apply workload penalty for high workload employees
-                candidates_df.loc[candidates_df["current_workload"] > 3, "custom_score"] *= 0.8
-                
-                # Try to use model prediction probabilities
-                try:
-                    employee_probs = model.predict_proba(X_candidates)
-                    model_scores = np.max(employee_probs, axis=1)
-                    
-                    # Calculate final score: 70% custom score + 30% model score
-                    candidates_df["final_score"] = 0.7 * candidates_df["custom_score"] + 0.3 * model_scores
-                except Exception as e:
-                    print(f"Model prediction error: {str(e)}")
-                    candidates_df["final_score"] = candidates_df["custom_score"]
-            else:
-                print(f"Not all columns exist for model: {feature_cols}")
-                candidates_df["final_score"] = candidates_df["skill_match_percentage"] / 100
-        else:
-            # Fallback scoring when no model is available
-            candidates_df["final_score"] = (
-                0.7 * candidates_df["skill_match_percentage"] / 100 +  # 70% weight for skill match
-                0.2 * candidates_df["success_rate"] / 100 +            # 20% weight for success rate
-                0.1 * candidates_df["experience"] / 10                 # 10% weight for experience
-            )
-        
-        # Sort by final score
-        candidates_df = candidates_df.sort_values("final_score", ascending=False)
-        
-        # Assign to the best employee
-        best_emp = candidates_df.iloc[0]
-        emp_id = best_emp["emp_id"]
-        
-        assignments[task_id] = {
-            "emp_id": emp_id,
-            "name": best_emp["name"],
-            "skill_match_percentage": f"{best_emp['skill_match_percentage']:.1f}%",
-            "score": f"{best_emp['final_score']:.3f}"
-        }
-        
-        # Update workload
-        current_workloads[emp_id] += 1
-    
-    return assignments
 
 def update_employee_metrics(emp_id):
     """Updates employee metrics based on completed tasks"""
@@ -687,10 +653,8 @@ def assign_tasks():
         employees = get_all_employees()
         
         # Load or train the model
-        model_data = load_or_train_model()
-        
-        # Assign tasks
-        assignments = assign_tasks_ml(tasks, employees, model_data)
+        model_data = load_model() or train_scoring_model(employees)
+        return assign_tasks_ml_scoring(tasks, employees, model_data)
         
         if isinstance(assignments, dict) and "error" in assignments:
             return jsonify({
@@ -844,10 +808,10 @@ def tasks_recommendation_endpoint():
         employees = get_all_employees()
         
         # Load or train the model
-        model_data = load_or_train_model()
+        model_data = load_model() or train_scoring_model(employees)
         
         # Get recommendations using ML model (but don't save anything)
-        assignments = assign_tasks_ml(tasks, employees, model_data)
+        assignments = assign_tasks_ml_scoring(tasks, employees, model_data)
         
         if isinstance(assignments, dict) and "error" in assignments:
             return jsonify({
@@ -876,7 +840,7 @@ def tasks_recommendation_endpoint():
 def get_pending_review_tasks():
     """Get all tasks that are submitted and waiting for review"""
     try:
-        # Get tasks with 'submitted' status
+        # The correct status should be 'submitted', not 'pending_review'
         pending_tasks = Task.query.filter_by(status='submitted').all()
         
         # Convert to dictionary format
@@ -1174,7 +1138,7 @@ def retrain_model():
         os.remove(model_path)
     
     # Train new model
-    model_data = train_model(model_path)
+    model_data = train_scoring_model(model_path)
     
     if model_data:
         return jsonify({

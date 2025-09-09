@@ -725,7 +725,7 @@ async function retrainSalaryModel() {
         console.log('Starting real API call for retraining...');
         
         // Make API call with session ID
-        const response = await fetch('/api/retrain', {
+        const response = await fetch('retrain_salary_model_with_tracking', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -929,7 +929,7 @@ async function retrainSalaryModel() {
         console.log('Starting real API call for retraining...');
         
         // Make API call with session ID
-        const response = await fetch('/api/retrain', {
+        const response = await fetch('/api/retrain_salary_model', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
